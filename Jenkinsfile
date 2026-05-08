@@ -26,7 +26,7 @@ pipeline {
       steps {
         sh 'node --version || true'
         sh 'npm --version || true'
-        sh 'npm ci --no-audit --no-fund'
+        sh 'npm install --no-audit --no-fund'
       }
     }
 
