@@ -97,19 +97,24 @@ pipeline {
       options { timeout(time: 60, unit: 'MINUTES') }
       steps {
         sh '''
-          # Clean any leftover files from previous runs.
-          # Files written by ZAP (non-root user) may not be removable by Jenkins,
-          # so wipe via a privileged throwaway container.
-          docker run --rm -v ${WORKSPACE}/zap-reports:/clean alpine:latest \
-            sh -c "rm -rf /clean/* /clean/.[!.]* 2>/dev/null || true" || true
-
+          # Clean any leftover reports in the workspace
+          rm -rf ${WORKSPACE}/zap-reports
           mkdir -p ${WORKSPACE}/zap-reports
-          chmod 777 ${WORKSPACE}/zap-reports
 
-          docker run --rm \
+          # Remove any zombie scan container from a previous failed run
+          docker rm -f zap-scan 2>/dev/null || true
+
+          # Run ZAP scan WITHOUT a volume mount.
+          # Reason: Jenkins runs in a container, so ${WORKSPACE} is inside the
+          # jenkins_home Docker volume. Sharing that path with a sibling ZAP
+          # container via -v causes Docker daemon to resolve the path on the
+          # host, where it does not exist as Jenkins sees it. ZAP then gets a
+          # root-owned empty directory and fails with Permission denied.
+          # Instead, let ZAP write reports inside its own filesystem and copy
+          # them out with docker cp after the scan finishes.
+          docker run --name zap-scan \
             --memory=6g \
             --network dast_juice-staging \
-            -v ${WORKSPACE}/zap-reports:/zap/wrk/:rw \
             zaproxy/zap-stable \
             zap-full-scan.py \
               -t http://juice-shop-staging:3000 \
@@ -119,8 +124,16 @@ pipeline {
               -z "-Xmx4g" \
             || true
 
-          # Sanity check that reports were actually written
-          ls -la ${WORKSPACE}/zap-reports/ || true
+          # Extract reports from the stopped container into Jenkins workspace
+          docker cp zap-scan:/zap/wrk/full-scan-report.html ${WORKSPACE}/zap-reports/ || true
+          docker cp zap-scan:/zap/wrk/full-scan-report.json ${WORKSPACE}/zap-reports/ || true
+          docker cp zap-scan:/zap/wrk/full-scan-report.md  ${WORKSPACE}/zap-reports/ || true
+
+          # Remove the container now that reports are safely in the workspace
+          docker rm zap-scan || true
+
+          # Sanity check
+          ls -la ${WORKSPACE}/zap-reports/
         '''
       }
     }
@@ -141,7 +154,10 @@ pipeline {
 
   post {
     always {
-      sh 'docker rm -f juice-shop-staging || true'
+      sh '''
+        docker rm -f juice-shop-staging 2>/dev/null || true
+        docker rm -f zap-scan 2>/dev/null || true
+      '''
       echo "Build #${env.BUILD_NUMBER} finished with status: ${currentBuild.currentResult}"
     }
   }
