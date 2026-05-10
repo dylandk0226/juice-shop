@@ -94,26 +94,36 @@ pipeline {
   }
 }
     stage('7. DAST — OWASP ZAP') {
-  steps {
-    sh '''
-      mkdir -p ${WORKSPACE}/zap-reports
-      chmod 777 ${WORKSPACE}/zap-reports   # ZAP container writes as non-root
+      options { timeout(time: 60, unit: 'MINUTES') }
+      steps {
+        sh '''
+          # Clean any leftover files from previous runs.
+          # Files written by ZAP (non-root user) may not be removable by Jenkins,
+          # so wipe via a privileged throwaway container.
+          docker run --rm -v ${WORKSPACE}/zap-reports:/clean alpine:latest \
+            sh -c "rm -rf /clean/* /clean/.[!.]* 2>/dev/null || true" || true
 
-      docker run --rm \
-        --memory=6g \
-        --network dast_juice-staging \
-        -v ${WORKSPACE}/zap-reports:/zap/wrk/:rw \
-        zaproxy/zap-stable \
-        zap-full-scan.py \
-          -t http://juice-shop-staging:3000 \
-          -r full-scan-report.html \
-          -J full-scan-report.json \
-          -w full-scan-report.md \
-          -z "-Xmx4g" \
-        || true   # ZAP exits non-zero on findings; do not fail build (yet)
-    '''
-  }
-}
+          mkdir -p ${WORKSPACE}/zap-reports
+          chmod 777 ${WORKSPACE}/zap-reports
+
+          docker run --rm \
+            --memory=6g \
+            --network dast_juice-staging \
+            -v ${WORKSPACE}/zap-reports:/zap/wrk/:rw \
+            zaproxy/zap-stable \
+            zap-full-scan.py \
+              -t http://juice-shop-staging:3000 \
+              -r full-scan-report.html \
+              -J full-scan-report.json \
+              -w full-scan-report.md \
+              -z "-Xmx4g" \
+            || true
+
+          # Sanity check that reports were actually written
+          ls -la ${WORKSPACE}/zap-reports/ || true
+        '''
+      }
+    }
     stage('8. Publish reports') {
   steps {
     archiveArtifacts artifacts: 'zap-reports/*', allowEmptyArchive: true
