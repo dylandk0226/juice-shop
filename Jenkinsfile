@@ -114,8 +114,9 @@ pipeline {
   }
 
   post {
-  always {
-    sh 'docker rm -f juice-shop-staging || true'
-    echo "Build #${env.BUILD_NUMBER} finished with status: ${currentBuild.currentResult}"
+    always {
+      sh 'docker rm -f juice-shop-staging || true'
+      echo "Build #${env.BUILD_NUMBER} finished with status: ${currentBuild.currentResult}"
+    }
   }
 }
