@@ -76,14 +76,20 @@ pipeline {
         -e NODE_ENV=unsafe \
         juice-shop:${BUILD_NUMBER}
 
-      # Wait until it's responding
-      for i in $(seq 1 30); do
-        if curl -sf http://localhost:3000 >/dev/null; then
-          echo "Staging is up"; exit 0
+      # Wait until it's responding — health-check from inside the
+      # dast_juice-staging network (Jenkins itself isn't on it, and
+      # 'localhost' inside the Jenkins container != the staging host).
+      for i in $(seq 1 60); do
+        if docker run --rm --network dast_juice-staging curlimages/curl:8.10.1 \
+             -sf http://juice-shop-staging:3000 >/dev/null 2>&1; then
+          echo "Staging is up after ${i} attempts (~$((i*3))s)"
+          exit 0
         fi
-        sleep 2
+        sleep 3
       done
-      echo "Staging never came up"; exit 1
+      echo "Staging never came up — last 50 lines of container logs:"
+      docker logs --tail 50 juice-shop-staging || true
+      exit 1
     '''
   }
 }
