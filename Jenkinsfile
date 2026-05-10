@@ -14,6 +14,14 @@ pipeline {
     SONAR_PROJECT_KEY = 'juice-shop'
   }
 
+  parameters {
+    choice(
+      name: 'RUN_MODE',
+      choices: ['dast-only', 'all'],
+      description: 'dast-only = skip SAST + Quality Gate (Member 1 — DAST work). all = full pipeline (use once teammates merge their stages).'
+    )
+  }
+
   stages {
 
     stage('1. Checkout') {
@@ -31,6 +39,7 @@ pipeline {
     }
 
     stage('3. SAST — SonarQube') {
+      when { expression { params.RUN_MODE == 'all' } }
       steps {
         script {
           def scannerHome = tool 'SonarScanner'
@@ -42,6 +51,7 @@ pipeline {
     }
 
     stage('4. Quality Gate') {
+      when { expression { params.RUN_MODE == 'all' } }
       steps {
         timeout(time: 5, unit: 'MINUTES') {
           waitForQualityGate abortPipeline: false
