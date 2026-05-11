@@ -191,7 +191,13 @@ YAML_EOF
           # Running as the intended zap user lets the AJAX spider's
           # Firefox browser launch correctly, which is essential for
           # discovering SPA routes in Juice Shop.
+          #
+          # ZAP_JVM_OPTIONS=-Xmx4g gives ZAP 4 GB heap. The default
+          # auto-sized heap (~2 GB) is too small for a full active
+          # scan on Juice Shop, causing the JVM to OOM and crash
+          # mid-scan before reports can be generated.
           docker run --name zap-scan \
+            -e ZAP_JVM_OPTIONS="-Xmx4g" \
             --memory=6g \
             --network dast_juice-staging \
             -v zap-wrk:/zap/wrk \
@@ -208,8 +214,19 @@ YAML_EOF
           docker rm zap-scan || true
           docker volume rm zap-wrk 2>/dev/null || true
 
-          # Sanity check
+          # Sanity check — list what we have
+          echo "=== Final contents of zap-reports/ ==="
           ls -la ${WORKSPACE}/zap-reports/
+
+          # Fail the stage explicitly if the HTML report is missing.
+          # This catches silent failures like ZAP OOM-ing mid-scan
+          # before reports are generated.
+          if [ ! -s "${WORKSPACE}/zap-reports/full-scan-report.html" ]; then
+            echo "ERROR: full-scan-report.html is missing or empty."
+            echo "Likely cause: ZAP crashed before report job ran."
+            echo "Check Java heap settings (ZAP_JVM_OPTIONS) and stage 7 console for OOM."
+            exit 1
+          fi
         '''
       }
     }
