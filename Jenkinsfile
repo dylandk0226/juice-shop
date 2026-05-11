@@ -97,24 +97,23 @@ pipeline {
       options { timeout(time: 60, unit: 'MINUTES') }
       steps {
         sh '''
-          # Clean any leftover reports in the workspace
+          # Clean any leftover state from previous runs
           rm -rf ${WORKSPACE}/zap-reports
           mkdir -p ${WORKSPACE}/zap-reports
-
-          # Remove any zombie scan container from a previous failed run
           docker rm -f zap-scan 2>/dev/null || true
+          docker volume rm zap-wrk 2>/dev/null || true
 
-          # Run ZAP scan WITHOUT a volume mount.
-          # Reason: Jenkins runs in a container, so ${WORKSPACE} is inside the
-          # jenkins_home Docker volume. Sharing that path with a sibling ZAP
-          # container via -v causes Docker daemon to resolve the path on the
-          # host, where it does not exist as Jenkins sees it. ZAP then gets a
-          # root-owned empty directory and fails with Permission denied.
-          # Instead, let ZAP write reports inside its own filesystem and copy
-          # them out with docker cp after the scan finishes.
+          # Run ZAP using a NAMED VOLUME for /zap/wrk.
+          # Why named volume and not a host bind mount:
+          #   * zap-full-scan.py refuses to run if /zap/wrk is not mounted.
+          #   * Host bind mount fails because Jenkins runs in a container and
+          #     its WORKSPACE path does not exist on the host as a real path.
+          #   * Named volumes are managed by the Docker daemon, so ZAP can
+          #     write to them without UID permission conflicts.
           docker run --name zap-scan \
             --memory=6g \
             --network dast_juice-staging \
+            -v zap-wrk:/zap/wrk \
             zaproxy/zap-stable \
             zap-full-scan.py \
               -t http://juice-shop-staging:3000 \
@@ -124,13 +123,16 @@ pipeline {
               -z "-Xmx4g" \
             || true
 
-          # Extract reports from the stopped container into Jenkins workspace
+          # Extract reports out of the container into Jenkins workspace.
+          # docker cp streams through the Docker daemon API, so it does not
+          # suffer from the host bind mount permission issues.
           docker cp zap-scan:/zap/wrk/full-scan-report.html ${WORKSPACE}/zap-reports/ || true
           docker cp zap-scan:/zap/wrk/full-scan-report.json ${WORKSPACE}/zap-reports/ || true
           docker cp zap-scan:/zap/wrk/full-scan-report.md  ${WORKSPACE}/zap-reports/ || true
 
-          # Remove the container now that reports are safely in the workspace
+          # Clean up container and volume
           docker rm zap-scan || true
+          docker volume rm zap-wrk 2>/dev/null || true
 
           # Sanity check
           ls -la ${WORKSPACE}/zap-reports/
@@ -157,6 +159,7 @@ pipeline {
       sh '''
         docker rm -f juice-shop-staging 2>/dev/null || true
         docker rm -f zap-scan 2>/dev/null || true
+        docker volume rm zap-wrk 2>/dev/null || true
       '''
       echo "Build #${env.BUILD_NUMBER} finished with status: ${currentBuild.currentResult}"
     }
