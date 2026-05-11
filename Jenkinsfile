@@ -175,15 +175,23 @@ YAML_EOF
           cat ${WORKSPACE}/zap-reports/automation.yaml
           echo "=== End of automation.yaml ==="
 
-          # Copy the YAML from workspace into the named volume via sidecar
+          # Copy the YAML from workspace into the named volume via sidecar.
+          # Also chmod the /zap/wrk directory to 777 so the non-root zap
+          # user can write report files into it from the ZAP container.
+          # We must NOT run ZAP as root (--user 0:0) because Firefox (used
+          # by the AJAX spider) refuses to run as root and silently fails,
+          # which makes the spider find ~0 URLs and the active scan finish
+          # in seconds with no findings.
           docker run --rm -i --user 0:0 -v zap-wrk:/zap/wrk alpine:latest \
-            sh -c "cat > /zap/wrk/automation.yaml" < ${WORKSPACE}/zap-reports/automation.yaml
+            sh -c "cat > /zap/wrk/automation.yaml && chmod -R 777 /zap/wrk" \
+            < ${WORKSPACE}/zap-reports/automation.yaml
 
-          # Run ZAP using the Automation Framework. zap.sh -autorun reads
-          # the YAML plan and executes each job in sequence. Run as root
-          # for the same reason as before (named volume mount perms).
+          # Run ZAP as the DEFAULT zap user (UID 1000), NOT as root.
+          # The chmod 777 above ensures the zap user can write reports.
+          # Running as the intended zap user lets the AJAX spider's
+          # Firefox browser launch correctly, which is essential for
+          # discovering SPA routes in Juice Shop.
           docker run --name zap-scan \
-            --user 0:0 \
             --memory=6g \
             --network dast_juice-staging \
             -v zap-wrk:/zap/wrk \
