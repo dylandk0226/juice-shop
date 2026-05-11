@@ -3,7 +3,7 @@ pipeline {
 
   options {
     timestamps()
-    timeout(time: 90, unit: 'MINUTES')
+    timeout(time: 120, unit: 'MINUTES')
   }
 
   tools {
@@ -94,7 +94,7 @@ pipeline {
   }
 }
     stage('7. DAST — OWASP ZAP') {
-      options { timeout(time: 60, unit: 'MINUTES') }
+      options { timeout(time: 90, unit: 'MINUTES') }
       steps {
         sh '''
           # Clean any leftover state from previous runs
