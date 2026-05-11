@@ -110,7 +110,14 @@ pipeline {
           #     its WORKSPACE path does not exist on the host as a real path.
           #   * Named volumes are managed by the Docker daemon, so ZAP can
           #     write to them without UID permission conflicts.
+          # Run ZAP as root (--user 0:0) to bypass the volume mount point
+          # permission issue. Fresh named volumes on Docker Desktop are
+          # mounted as root:root 755, blocking the default non-root zap
+          # user from writing reports. Running as root is safe here because
+          # the container is ephemeral and operates only on the staging
+          # network; --rm-equivalent cleanup happens after docker cp.
           docker run --name zap-scan \
+            --user 0:0 \
             --memory=6g \
             --network dast_juice-staging \
             -v zap-wrk:/zap/wrk \
