@@ -106,12 +106,10 @@ pipeline {
           # Create the named volume that ZAP will write into
           docker volume create zap-wrk
 
-          # Write the ZAP Automation Framework plan into the volume via a
-          # tiny sidecar container. The plan controls every phase of the
-          # scan (spider, AJAX spider, active scan) and emits a styled
-          # HTML report using the traditional-html-plus template.
-          docker run --rm -i --user 0:0 -v zap-wrk:/zap/wrk alpine:latest \
-            sh -c "cat > /zap/wrk/automation.yaml" <<'YAML_EOF'
+          # Write the ZAP Automation Framework plan to the Jenkins workspace
+          # first (so it is visible in archived artifacts for debugging),
+          # then copy it into the volume via a sidecar container.
+          cat > ${WORKSPACE}/zap-reports/automation.yaml <<'YAML_EOF'
 env:
   contexts:
     - name: juice-shop
@@ -171,6 +169,15 @@ jobs:
       reportDir: /zap/wrk/
       reportFile: full-scan-report
 YAML_EOF
+
+          # Show the YAML that was written (for build log inspection)
+          echo "=== Generated automation.yaml ==="
+          cat ${WORKSPACE}/zap-reports/automation.yaml
+          echo "=== End of automation.yaml ==="
+
+          # Copy the YAML from workspace into the named volume via sidecar
+          docker run --rm -i --user 0:0 -v zap-wrk:/zap/wrk alpine:latest \
+            sh -c "cat > /zap/wrk/automation.yaml" < ${WORKSPACE}/zap-reports/automation.yaml
 
           # Run ZAP using the Automation Framework. zap.sh -autorun reads
           # the YAML plan and executes each job in sequence. Run as root
