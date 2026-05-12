@@ -136,6 +136,7 @@ pipeline {
               -J full-scan-report.json \
               -w full-scan-report.md \
               -j \
+              -z "-config scanner.maxScanDurationInMins=45 -config scanner.maxRuleDurationInMins=5" \
             || true
 
           # Extract reports into Jenkins workspace via docker cp
