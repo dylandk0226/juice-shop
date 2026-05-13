@@ -10,8 +10,6 @@ pipeline {
     environment {
         // Fetches the installation path of the SonarQube Scanner configured in Jenkins and assigns it to this variable
         SONAR_SCANNER_HOME = tool 'SonarQube Scanner'
-        // Pulls a secure token from Jenkins Credentials Manager (ID: snyk-token)
-        SNYK_TOKEN         = credentials('snyk-token')
         // Sets a directory name where reports will be stored
         REPORT_DIR         = 'reports'
         // Docker image name and tag for the Juice Shop build
@@ -205,20 +203,25 @@ pipeline {
                 // Runs scan: Scans all projects; Only reports medium+ vulnerabilities;
                 // Outputs JSON report; || true prevents pipeline failure
                 echo '>>> Running SCA with Snyk...'
-                sh """
-                    snyk auth \$SNYK_TOKEN
+                // withCredentials looks up the snyk-token credential only when this
+                // stage runs, not at pipeline start. This means dast-only builds
+                // do not require the snyk-token credential to exist in Jenkins.
+                withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
+                    sh """
+                        snyk auth \$SNYK_TOKEN
 
-                    snyk test \
-                        --all-projects \
-                        --severity-threshold=medium \
-                        --json > ${REPORT_DIR}/snyk-report.json || true
+                        snyk test \
+                            --all-projects \
+                            --severity-threshold=medium \
+                            --json > ${REPORT_DIR}/snyk-report.json || true
 
-                    snyk test \
-                        --all-projects \
-                        --severity-threshold=medium || true
+                        snyk test \
+                            --all-projects \
+                            --severity-threshold=medium || true
 
-                    echo "Snyk scan complete."
-                """
+                        echo "Snyk scan complete."
+                    """
+                }
             } // Runs again for human-readable console output
         }
 
