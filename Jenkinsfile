@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     tools {
-        nodejs 'NodeJS'
+        nodejs 'NodeJS-20'
     }
     // triggers {
     //     pollSCM('H/5 * * * *') // check every 5 minutes
