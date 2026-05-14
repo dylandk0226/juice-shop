@@ -46,7 +46,7 @@ pipeline {
 
                 echo '>>> Checking out Juice Shop source...'
 
-                git branch: 'mary',
+                git branch: 'dylan',
                     url: 'https://github.com/dylandk0226/juice-shop.git'
 
                 sh "mkdir -p ${REPORT_DIR}"
