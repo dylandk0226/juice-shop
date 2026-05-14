@@ -1,279 +1,314 @@
 pipeline {
+
     agent any
 
     tools {
-        nodejs 'NodeJS-20'
+        nodejs 'NodeJS'
     }
-    // triggers {
-    //     pollSCM('H/5 * * * *') // check every 5 minutes
-    // }
+
     environment {
-        // Sets a directory name where reports will be stored
-        REPORT_DIR         = 'reports'
-        // Docker image name and tag for the Juice Shop build
-        // Built from the multi-stage Dockerfile: node:24 installer → distroless/nodejs24 runtime
-        IMAGE_NAME         = 'juice-shop'
-        IMAGE_TAG          = "${env.BUILD_NUMBER}"
-        // Juice Shop target URL for DAST scanning — reachable via shared Docker network devsecops-net
-        ZAP_TARGET_URL     = 'http://juice-shop:3000'
-        // Output path for the ZAP HTML report
-        ZAP_REPORT         = 'reports/zap-report.html'
+
+        // SonarQube Scanner configured in Jenkins
+        SONAR_SCANNER_HOME = tool 'SonarQube Scanner'
+
+        // Jenkins credentials
+        SNYK_TOKEN = credentials('snyk-token')
+
+        // Reports folder
+        REPORT_DIR = 'reports'
+
+        // Docker image config
+        IMAGE_NAME = 'juice-shop'
+        IMAGE_TAG = "${BUILD_NUMBER}"
+
+        // OWASP ZAP target
+        ZAP_TARGET_URL = 'http://juice-shop:3000'
     }
-    // Pipeline Options
-    // Configures global pipeline behavior
+
     options {
-        // Adds timestamps to console logs
+
         timestamps()
-        // Stops the pipeline if it runs longer than 120 minutes
-        // (Bumped from 60 -> 120 to fit the full ZAP DAST scan, which can take
-        //  40-55 minutes on its own. The DAST stage also has its own 90-minute
-        //  timeout for safety.)
+
         timeout(time: 150, unit: 'MINUTES')
-        // Keeps only the last 10 builds to save disk space
+
         buildDiscarder(logRotator(numToKeepStr: '10'))
     }
-    // Build parameter to control which scan stages run.
-    // Default is dast-only so webhook-triggered builds skip SAST and SCA,
-    // which speeds up iteration on the DAST work. Choose 'all' from
-    // "Build with Parameters" to run the full pipeline.
-    parameters {
-        choice(
-            name: 'RUN_MODE',
-            choices: ['dast-only', 'all'],
-            description: 'dast-only = skip SAST + SCA stages (Member 1 DAST iteration). all = run the full pipeline.'
-        )
-    }
+
     stages {
-        // Stage name: Checkout source code
+
+        /*
+        ======================================================
+        Stage 1: Checkout Source Code
+        ======================================================
+        */
         stage('Checkout SCM') {
             steps {
+
                 echo '>>> Checking out Juice Shop source...'
-                git branch: 'dylan',
+
+                git branch: 'mary',
                     url: 'https://github.com/dylandk0226/juice-shop.git'
-                sh 'mkdir -p ${REPORT_DIR}' // Creates the reports directory (if it doesn't exist)
+
+                sh "mkdir -p ${REPORT_DIR}"
             }
         }
 
-        stage('Verify Node'){
+        /*
+        ======================================================
+        Stage 2: Verify Node.js
+        ======================================================
+        */
+        stage('Verify Node') {
             steps {
-                sh 'node --version' // Confirms NodeJS plugin is working correctly
+
+                sh 'node --version'
+
                 sh 'npm --version'
             }
         }
 
+        /*
+        ======================================================
+        Stage 3: Install Dependencies
+        ======================================================
+        */
         stage('Install Dependencies') {
             steps {
-                echo '>>> Installing dependencies (skipping postinstall to avoid Angular build)...'
-                // Installs Node.js dependencies; --ignore-scripts avoids running post-install scripts (e.g., Angular build)
+
+                echo '>>> Installing dependencies...'
+
                 sh 'npm install --ignore-scripts'
             }
         }
 
-        // Runs Static Application Security Testing (SAST)
-        stage('SAST - SonarQube Scan') {
-            when { expression { params.RUN_MODE == 'all' } }
+        /*
+        ======================================================
+        Stage 4: SAST - SonarQube
+        ======================================================
+        */
+        stage('SAST - SonarQube') {
             steps {
+
                 echo '>>> Running SAST with SonarQube...'
-                // tool lookup happens inside the stage so dast-only builds do
-                // not require the SonarQube Scanner tool to be configured.
-                script {
-                    def scannerHome = tool 'SonarScanner'
-                    withSonarQubeEnv('SonarQube') {
-                        sh """
-                            ${scannerHome}/bin/sonar-scanner \
-                              -Dsonar.projectKey=juice-shop \
-                              -Dsonar.projectName='Juice Shop' \
-                              -Dsonar.projectVersion=19.2.1 \
-                              -Dsonar.sources=. \
-                              -Dsonar.exclusions=**/node_modules/**,**/test/**,**/frontend/dist/**,**/frontend/src/assets/**,**/.angular/** \
-                              -Dsonar.typescript.tsconfigPath=tsconfig.json \
-                              -Dsonar.javascript.lcov.reportPaths=build/reports/coverage/server-tests/lcov.info \
-                              -Dsonar.sourceEncoding=UTF-8
-                        """
-                    }
-                }
-            }
-        }
 
-        // Checks SonarQube quality gate result
-        stage('SAST - SonarQube Analysis') {
-            when { expression { params.RUN_MODE == 'all' } }
-            steps {
-                echo '>>> Checking SonarQube Quality Gate result...'
-                // Waits max 5 minutes; Requires a SonarQube webhook configured in SonarQube pointing back to: http://<jenkins-url>/sonarqube-webhook/
-                // Without this webhook, waitForQualityGate will hang until timeout
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: false  // Waits for SonarQube result
-                } // abortPipeline: false → pipeline continues even if it fails
-            }
-        }
+                withSonarQubeEnv('SonarQube') {
 
-        // Runs OWASP Dependency-Check: scans package.json and node_modules against the
-        // NVD (National Vulnerability Database) to detect known CVEs in third-party libraries.
-        // Complements Snyk — Dependency-Check uses NVD CVE data while Snyk uses its own
-        // advisory database, so running both gives cross-validated SCA coverage.
-        // stage('SCA - OWASP Dependency-Check') {
-        //     steps {
-        //         echo '>>> Running SCA with OWASP Dependency-Check...'
-        //         // dependency-check.sh is provided by the OWASP Dependency-Check Jenkins plugin
-        //         // --project        : display name in the generated report
-        //         // --scan           : path to scan (current workspace)
-        //         // --exclude        : skip node_modules to avoid scanning dev tool internals
-        //         // --out            : output directory for reports
-        //         // --format         : generate both HTML (human-readable) and JSON (machine-readable)
-        //         // --enableExperimental : enables Node.js / npm audit analyser
-        //         // --nvdApiKey      : NVD API key stored in Jenkins credentials for faster CVE database updates
-        //         //                   (without it, NVD throttles downloads — first run can take 20+ minutes)
-        //         // || true          : prevents pipeline failure if vulnerabilities are found;
-        //         //                   findings are reviewed manually in the report
-        //         sh """
-        //             /var/jenkins_home/tools/dependency-check/bin/dependency-check.sh \
-        //               --project 'Juice Shop' \
-        //               --scan . \
-        //               --exclude '**/node_modules/**' \
-        //               --out ${REPORT_DIR} \
-        //               --format HTML \
-        //               --format JSON \
-        //               --enableExperimental \
-        //               || true
-        //         """
-        //         // Archives the generated HTML report as a Jenkins build artifact
-        //         // dependency-check-report.html is written to ${REPORT_DIR} by the tool
-        //         echo '>>> OWASP Dependency-Check scan complete. Report saved to ${REPORT_DIR}.'
-        //     }
-        // }
-
-        //Runs Software Composition Analysis (dependency vulnerability scan)
-        stage('SCA - Snyk Scan') {
-            when { expression { params.RUN_MODE == 'all' } }
-            steps {
-                // Authenticates Snyk using stored token
-                // Runs scan: Scans all projects; Only reports medium+ vulnerabilities;
-                // Outputs JSON report; || true prevents pipeline failure
-                echo '>>> Running SCA with Snyk...'
-                // withCredentials looks up the snyk-token credential only when this
-                // stage runs, not at pipeline start. This means dast-only builds
-                // do not require the snyk-token credential to exist in Jenkins.
-                withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
                     sh """
-                        snyk auth \$SNYK_TOKEN
-
-                        snyk test \
-                            --all-projects \
-                            --severity-threshold=medium \
-                            --json > ${REPORT_DIR}/snyk-report.json || true
-
-                        snyk test \
-                            --all-projects \
-                            --severity-threshold=medium || true
-
-                        echo "Snyk scan complete."
+                        ${SONAR_SCANNER_HOME}/bin/sonar-scanner \\
+                          -Dsonar.projectKey=juice-shop \\
+                          -Dsonar.projectName='Juice Shop' \\
+                          -Dsonar.projectVersion=19.2.1 \\
+                          -Dsonar.sources=. \\
+                          -Dsonar.exclusions=**/node_modules/**,**/test/**,**/frontend/dist/**,**/frontend/src/assets/**,**/.angular/** \\
+                          -Dsonar.typescript.tsconfigPath=tsconfig.json \\
+                          -Dsonar.javascript.lcov.reportPaths=build/reports/coverage/server-tests/lcov.info \\
+                          -Dsonar.sourceEncoding=UTF-8
                     """
+
+                    // Wait for server-side analysis, then export findings
+                    sh """
+                        sleep 15
+
+                        curl -s -u \${SONAR_AUTH_TOKEN}: \\
+                            "\${SONAR_HOST_URL}/api/issues/search?componentKeys=juice-shop&ps=500" \\
+                            > ${REPORT_DIR}/sonar-issues.json
+
+                        curl -s -u \${SONAR_AUTH_TOKEN}: \\
+                            "\${SONAR_HOST_URL}/api/hotspots/search?projectKey=juice-shop&ps=500" \\
+                            > ${REPORT_DIR}/sonar-hotspots.json
+
+                        curl -s -u \${SONAR_AUTH_TOKEN}: \\
+                            "\${SONAR_HOST_URL}/api/measures/component?component=juice-shop&metricKeys=bugs,vulnerabilities,code_smells,security_rating,reliability_rating,coverage,duplicated_lines_density" \\
+                            > ${REPORT_DIR}/sonar-metrics.json
+                    """
+
+                    echo "SonarQube Dashboard:"
+                    echo "${SONAR_HOST_URL}/dashboard?id=juice-shop"
                 }
-            } // Runs again for human-readable console output
+            }
         }
 
+        /*
+        ======================================================
+        Stage 5: SonarQube Quality Gate
+        ======================================================
+        */
+        stage('Quality Gate') {
+            steps {
+
+                echo '>>> Waiting for SonarQube Quality Gate...'
+
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: false
+                }
+            }
+        }
+
+        /*
+        ======================================================
+        Stage 6: SCA - Snyk
+        ======================================================
+        */
+        stage('SCA - Snyk Scan') {
+            steps {
+
+                echo '>>> Running SCA with Snyk...'
+
+                sh """
+                    npm install -g snyk snyk-to-html || npm install snyk snyk-to-html
+
+                    npx snyk auth \$SNYK_TOKEN
+
+                    npx snyk test \\
+                        --all-projects \\
+                        --severity-threshold=low \\
+                        --json > ${REPORT_DIR}/snyk-report.json || true
+
+                    npx snyk-to-html \\
+                        -i ${REPORT_DIR}/snyk-report.json \\
+                        -o ${REPORT_DIR}/snyk-report.html || true
+
+                    npx snyk test \\
+                        --all-projects \\
+                        --severity-threshold=low || true
+
+                    npx snyk monitor \\
+                        --all-projects \\
+                        --project-name=juice-shop-jenkins-build-\${BUILD_NUMBER} || true
+
+                    echo "Snyk scan completed."
+                """
+            }
+        }
+
+        /*
+        ======================================================
+        Stage 7: Deploy to Test Environment
+        ======================================================
+        */
         stage('Deploy to Test Env') {
             steps {
-                echo '>>> Building and deploying Juice Shop container to test environment...'
+
+                echo '>>> Building and deploying Juice Shop...'
+
                 sh """
-                    # Build the Docker image from the checked-out source first.
-                    # Without this, the docker run below would fail because the
-                    # juice-shop:${IMAGE_TAG} image would not yet exist.
                     docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
 
-                    # Ensure the shared network exists (idempotent — || true if already there)
                     docker network create devsecops-net || true
 
-                    # Stop and remove any existing juice-shop container from a previous build
                     docker rm -f juice-shop || true
 
-                    # Run Juice Shop on devsecops-net so ZAP can reach it by hostname
-                    # -d           : detached (background)
-                    # --name       : container name — used as DNS hostname on the Docker network
-                    # --network    : shared network with Jenkins and ZAP containers
-                    # -p 3000:3000 : also expose on host for manual verification in browser
-                    docker run -d \
-                      --name juice-shop \
-                      --network devsecops-net \
-                      -p 3000:3000 \
+                    docker run -d \\
+                      --name juice-shop \\
+                      --network devsecops-net \\
+                      -p 3000:3000 \\
                       ${IMAGE_NAME}:${IMAGE_TAG}
                 """
 
                 sh """
-                    echo '>>> Waiting for Juice Shop to be ready...'
+                    echo '>>> Waiting for Juice Shop to start...'
+
                     for i in \$(seq 1 60); do
-                        if docker run --rm --network devsecops-net curlimages/curl:8.10.1 \
+
+                        if docker run --rm --network devsecops-net curlimages/curl:8.10.1 \\
                              -sf http://juice-shop:3000 >/dev/null 2>&1; then
-                            echo "Juice Shop is up after \$((i * 3))s"
+
+                            echo "Juice Shop is ready after \$((i * 3)) seconds"
                             exit 0
                         fi
-                        echo "Attempt \$i/60 — not ready yet, retrying in 3s..."
+
+                        echo "Attempt \$i/60 — retrying in 3 seconds..."
                         sleep 3
                     done
-                    echo "Juice Shop never came up — last 50 lines of container logs:"
+
+                    echo "Juice Shop failed to start."
                     docker logs --tail 50 juice-shop || true
                     exit 1
                 """
-                echo '>>> Juice Shop deployed at http://juice-shop:3000 (internal) and http://localhost:3000 (host)'
             }
         }
 
+        /*
+        ======================================================
+        Stage 8: DAST - OWASP ZAP
+        ======================================================
+        */
         stage('DAST - OWASP ZAP') {
-            options { timeout(time: 120, unit: 'MINUTES') }
+
+            options {
+                timeout(time: 120, unit: 'MINUTES')
+            }
+
             steps {
-                echo '>>> Running DAST with OWASP ZAP full scan...'
+
+                echo '>>> Running OWASP ZAP full scan...'
+
                 sh """
                     docker rm -f zap-scan 2>/dev/null || true
                     docker volume rm zap-wrk 2>/dev/null || true
 
                     docker volume create zap-wrk
-                    docker run --rm --user 0:0 -v zap-wrk:/zap/wrk alpine:latest \
+
+                    docker run --rm --user 0:0 -v zap-wrk:/zap/wrk alpine:latest \\
                         chmod 777 /zap/wrk
 
-                    docker run --name zap-scan \
-                        -e ZAP_JVM_OPTIONS=-Xmx4g \
-                        --memory=6g \
-                        --network devsecops-net \
-                        -v zap-wrk:/zap/wrk \
-                        ghcr.io/zaproxy/zaproxy:stable \
-                        zap-full-scan.py \
-                            -t ${ZAP_TARGET_URL} \
-                            -r zap-report.html \
-                            -J zap-report.json \
-                            -w zap-report.md \
-                            -j \
+                    docker run --name zap-scan \\
+                        -e ZAP_JVM_OPTIONS=-Xmx4g \\
+                        --memory=6g \\
+                        --network devsecops-net \\
+                        -v zap-wrk:/zap/wrk \\
+                        ghcr.io/zaproxy/zaproxy:stable \\
+                        zap-full-scan.py \\
+                            -t ${ZAP_TARGET_URL} \\
+                            -r zap-report.html \\
+                            -J zap-report.json \\
+                            -w zap-report.md \\
+                            -j \\
                         || true
 
                     docker cp zap-scan:/zap/wrk/zap-report.html \${WORKSPACE}/${REPORT_DIR}/ || true
                     docker cp zap-scan:/zap/wrk/zap-report.json \${WORKSPACE}/${REPORT_DIR}/ || true
-                    docker cp zap-scan:/zap/wrk/zap-report.md  \${WORKSPACE}/${REPORT_DIR}/ || true
+                    docker cp zap-scan:/zap/wrk/zap-report.md \${WORKSPACE}/${REPORT_DIR}/ || true
 
                     docker rm zap-scan || true
                     docker volume rm zap-wrk 2>/dev/null || true
 
-                    echo "=== Final contents of ${REPORT_DIR}/ ==="
                     ls -la \${WORKSPACE}/${REPORT_DIR}/
 
                     if [ ! -s "\${WORKSPACE}/${REPORT_DIR}/zap-report.html" ]; then
-                        echo "ERROR: zap-report.html is missing or empty."
-                        echo "Likely cause: ZAP crashed before report generation."
-                        echo "Check ZAP_JVM_OPTIONS and stage console for OOM."
+                        echo "ERROR: zap-report.html missing."
                         exit 1
                     fi
                 """
-                echo '>>> ZAP scan complete. Report saved to ${REPORT_DIR}/zap-report.html'
             }
         }
 
-        // Publishes the ZAP HTML report so it appears as a clickable link in
-        // the Jenkins build sidebar. The reports are also archived as build
-        // artifacts by the post-always block below for download.
-        stage('Publish reports') {
+        /*
+        ======================================================
+        Stage 9: Publish All Reports
+        ======================================================
+        */
+        stage('Publish Reports') {
             steps {
-                archiveArtifacts artifacts: 'reports/*', allowEmptyArchive: true
+
+                echo '>>> Publishing reports...'
+
+                archiveArtifacts artifacts: 'reports/**',
+                                 allowEmptyArchive: true
+
+                // Publish Snyk HTML Report
                 publishHTML(target: [
-                    allowMissing: false,
+                    allowMissing: true,
+                    alwaysLinkToLastBuild: true,
+                    keepAll: true,
+                    reportDir: 'reports',
+                    reportFiles: 'snyk-report.html',
+                    reportName: 'Snyk SCA Report'
+                ])
+
+                // Publish ZAP HTML Report
+                publishHTML(target: [
+                    allowMissing: true,
                     alwaysLinkToLastBuild: true,
                     keepAll: true,
                     reportDir: 'reports',
@@ -283,38 +318,36 @@ pipeline {
             }
         }
     }
-    // Defines actions after pipeline execution
 
+    /*
+    ======================================================
+    Post Build Actions
+    ======================================================
+    */
     post {
-        // Runs regardless of success/failure
+
         always {
-            echo '>>> Archiving scan reports...'
-            // Saves report files as Jenkins build artifacts
-            // snyk-report.json is already inside ${REPORT_DIR}/ so only one glob is needed
+
+            echo '>>> Cleaning up Docker resources...'
+
             archiveArtifacts artifacts: 'reports/**',
                              allowEmptyArchive: true
 
-            // Tear down the test containers and ZAP volume after every build
-            // so the next build starts with a clean slate.
-            // Cleans up both juice-shop (Mary's naming) and juice-shop-staging
-            // (the alternate naming used by the standalone DAST pipeline) so
-            // this post block is safe for either pipeline variant.
-            // 2>/dev/null silences "no such container/volume" noise.
-            // || true ensures this never fails the pipeline even if the resource was already gone.
             sh '''
                 docker rm -f juice-shop 2>/dev/null || true
-                docker rm -f juice-shop-staging 2>/dev/null || true
                 docker rm -f zap-scan 2>/dev/null || true
                 docker volume rm zap-wrk 2>/dev/null || true
             '''
 
             echo "Build #${env.BUILD_NUMBER} finished with status: ${currentBuild.currentResult}"
         }
+
         success {
-            echo 'All stages completed. Review findings in SonarQube, Snyk, and ZAP reports.'
+            echo 'Pipeline completed successfully.'
         }
+
         failure {
-            echo 'Pipeline failed. Check logs above for details.'
+            echo 'Pipeline failed. Review Jenkins logs and published reports.'
         }
     }
 }
