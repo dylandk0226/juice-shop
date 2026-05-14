@@ -8,6 +8,8 @@ pipeline {
 
     environment {
 
+        SONAR_TOKEN = credentials('sonar-token')
+
         // SonarQube Scanner configured in Jenkins
         SONAR_SCANNER_HOME = tool 'SonarQube Scanner'
 
@@ -107,23 +109,27 @@ pipeline {
 
                     // Wait for server-side analysis, then export findings
                     sh """
-                        sleep 15
+                        for i in \$(seq 1 12); do
+                            curl -s -u \${SONAR_TOKEN}: "\${SONAR_HOST_URL}/api/ce/activity" | grep SUCCESS && break
+                            echo "Waiting for SonarQube processing..."
+                            sleep 10
+                        done
 
-                        curl -s -u \${SONAR_AUTH_TOKEN}: \\
+                        curl -s -u \${SONAR_TOKEN}: \\
                             "\${SONAR_HOST_URL}/api/issues/search?componentKeys=juice-shop&ps=500" \\
                             > ${REPORT_DIR}/sonar-issues.json
 
-                        curl -s -u \${SONAR_AUTH_TOKEN}: \\
+                        curl -s -u \${SONAR_TOKEN}: \\
                             "\${SONAR_HOST_URL}/api/hotspots/search?projectKey=juice-shop&ps=500" \\
                             > ${REPORT_DIR}/sonar-hotspots.json
 
-                        curl -s -u \${SONAR_AUTH_TOKEN}: \\
+                        curl -s -u \${SONAR_TOKEN}: \\
                             "\${SONAR_HOST_URL}/api/measures/component?component=juice-shop&metricKeys=bugs,vulnerabilities,code_smells,security_rating,reliability_rating,coverage,duplicated_lines_density" \\
                             > ${REPORT_DIR}/sonar-metrics.json
                     """
 
                     echo "SonarQube Dashboard:"
-                    echo "${SONAR_HOST_URL}/dashboard?id=juice-shop"
+                    echo "http://localhost:9000/dashboard?id=juice-shop"
                 }
             }
         }
@@ -138,8 +144,15 @@ pipeline {
 
                 echo '>>> Waiting for SonarQube Quality Gate...'
 
-                timeout(time: 5, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: false
+                timeout(time: 15, unit: 'MINUTES') {
+                    script {
+                        def qg = waitForQualityGate()
+                        echo "SonarQube Quality Gate status: ${qg.status}"
+                        
+                        if (qg.status != 'OK') {
+                            error "Pipeline failed due to SonarQube Quality Gate: ${qg.status}"
+                        }
+                    }
                 }
             }
         }
