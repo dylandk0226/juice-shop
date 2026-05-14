@@ -3,16 +3,13 @@ pipeline {
     agent any
 
     tools {
-        nodejs 'NodeJS'
+        nodejs 'NodeJS-20'
     }
 
     environment {
 
         // SonarQube Scanner configured in Jenkins
-        SONAR_SCANNER_HOME = tool 'SonarQube Scanner'
-
-        // Jenkins credentials
-        SNYK_TOKEN = credentials('snyk-token')
+        SONAR_SCANNER_HOME = tool 'SonarScanner'
 
         // Reports folder
         REPORT_DIR = 'reports'
@@ -32,6 +29,17 @@ pipeline {
         timeout(time: 150, unit: 'MINUTES')
 
         buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    // Choose which scan stages run. Default is dast-only so webhook-triggered
+    // builds skip SAST and SCA, allowing fast iteration on the DAST work.
+    // Choose 'all' from "Build with Parameters" to run the full pipeline.
+    parameters {
+        choice(
+            name: 'RUN_MODE',
+            choices: ['dast-only', 'all'],
+            description: 'dast-only = skip SAST + Quality Gate + SCA stages. all = run the full pipeline.'
+        )
     }
 
     stages {
@@ -87,6 +95,7 @@ pipeline {
         ======================================================
         */
         stage('SAST - SonarQube') {
+            when { expression { params.RUN_MODE == 'all' } }
             steps {
 
                 echo '>>> Running SAST with SonarQube...'
@@ -134,6 +143,7 @@ pipeline {
         ======================================================
         */
         stage('Quality Gate') {
+            when { expression { params.RUN_MODE == 'all' } }
             steps {
 
                 echo '>>> Waiting for SonarQube Quality Gate...'
@@ -150,34 +160,39 @@ pipeline {
         ======================================================
         */
         stage('SCA - Snyk Scan') {
+            when { expression { params.RUN_MODE == 'all' } }
             steps {
 
                 echo '>>> Running SCA with Snyk...'
 
-                sh """
-                    npm install -g snyk snyk-to-html || npm install snyk snyk-to-html
+                // Look up snyk-token only when this stage actually runs.
+                // dast-only builds therefore do not require the credential to exist.
+                withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
+                    sh """
+                        npm install -g snyk snyk-to-html || npm install snyk snyk-to-html
 
-                    npx snyk auth \$SNYK_TOKEN
+                        npx snyk auth \$SNYK_TOKEN
 
-                    npx snyk test \\
-                        --all-projects \\
-                        --severity-threshold=low \\
-                        --json > ${REPORT_DIR}/snyk-report.json || true
+                        npx snyk test \\
+                            --all-projects \\
+                            --severity-threshold=low \\
+                            --json > ${REPORT_DIR}/snyk-report.json || true
 
-                    npx snyk-to-html \\
-                        -i ${REPORT_DIR}/snyk-report.json \\
-                        -o ${REPORT_DIR}/snyk-report.html || true
+                        npx snyk-to-html \\
+                            -i ${REPORT_DIR}/snyk-report.json \\
+                            -o ${REPORT_DIR}/snyk-report.html || true
 
-                    npx snyk test \\
-                        --all-projects \\
-                        --severity-threshold=low || true
+                        npx snyk test \\
+                            --all-projects \\
+                            --severity-threshold=low || true
 
-                    npx snyk monitor \\
-                        --all-projects \\
-                        --project-name=juice-shop-jenkins-build-\${BUILD_NUMBER} || true
+                        npx snyk monitor \\
+                            --all-projects \\
+                            --project-name=juice-shop-jenkins-build-\${BUILD_NUMBER} || true
 
-                    echo "Snyk scan completed."
-                """
+                        echo "Snyk scan completed."
+                    """
+                }
             }
         }
 
