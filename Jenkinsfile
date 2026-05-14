@@ -95,52 +95,6 @@ pipeline {
             }
         }
 
-        stage('Deploy to Test Env') {
-            steps {
-                echo '>>> Building and deploying Juice Shop container to test environment...'
-                sh """
-                    # Build the Docker image from the checked-out source first.
-                    # Without this, the docker run below would fail because the
-                    # juice-shop:${IMAGE_TAG} image would not yet exist.
-                    docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
-
-                    # Ensure the shared network exists (idempotent — || true if already there)
-                    docker network create devsecops-net || true
-
-                    # Stop and remove any existing juice-shop container from a previous build
-                    docker rm -f juice-shop || true
-
-                    # Run Juice Shop on devsecops-net so ZAP can reach it by hostname
-                    # -d           : detached (background)
-                    # --name       : container name — used as DNS hostname on the Docker network
-                    # --network    : shared network with Jenkins and ZAP containers
-                    # -p 3000:3000 : also expose on host for manual verification in browser
-                    docker run -d \
-                      --name juice-shop \
-                      --network devsecops-net \
-                      -p 3000:3000 \
-                      ${IMAGE_NAME}:${IMAGE_TAG}
-                """
-
-                sh """
-                    echo '>>> Waiting for Juice Shop to be ready...'
-                    for i in \$(seq 1 60); do
-                        if docker run --rm --network devsecops-net curlimages/curl:8.10.1 \
-                             -sf http://juice-shop:3000 >/dev/null 2>&1; then
-                            echo "Juice Shop is up after \$((i * 3))s"
-                            exit 0
-                        fi
-                        echo "Attempt \$i/60 — not ready yet, retrying in 3s..."
-                        sleep 3
-                    done
-                    echo "Juice Shop never came up — last 50 lines of container logs:"
-                    docker logs --tail 50 juice-shop || true
-                    exit 1
-                """
-                echo '>>> Juice Shop deployed at http://juice-shop:3000 (internal) and http://localhost:3000 (host)'
-            }
-        }
-
         // Checks SonarQube quality gate result
         stage('SAST - SonarQube Analysis') {
             when { expression { params.RUN_MODE == 'all' } }
@@ -217,6 +171,52 @@ pipeline {
                     """
                 }
             } // Runs again for human-readable console output
+        }
+
+        stage('Deploy to Test Env') {
+            steps {
+                echo '>>> Building and deploying Juice Shop container to test environment...'
+                sh """
+                    # Build the Docker image from the checked-out source first.
+                    # Without this, the docker run below would fail because the
+                    # juice-shop:${IMAGE_TAG} image would not yet exist.
+                    docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+
+                    # Ensure the shared network exists (idempotent — || true if already there)
+                    docker network create devsecops-net || true
+
+                    # Stop and remove any existing juice-shop container from a previous build
+                    docker rm -f juice-shop || true
+
+                    # Run Juice Shop on devsecops-net so ZAP can reach it by hostname
+                    # -d           : detached (background)
+                    # --name       : container name — used as DNS hostname on the Docker network
+                    # --network    : shared network with Jenkins and ZAP containers
+                    # -p 3000:3000 : also expose on host for manual verification in browser
+                    docker run -d \
+                      --name juice-shop \
+                      --network devsecops-net \
+                      -p 3000:3000 \
+                      ${IMAGE_NAME}:${IMAGE_TAG}
+                """
+
+                sh """
+                    echo '>>> Waiting for Juice Shop to be ready...'
+                    for i in \$(seq 1 60); do
+                        if docker run --rm --network devsecops-net curlimages/curl:8.10.1 \
+                             -sf http://juice-shop:3000 >/dev/null 2>&1; then
+                            echo "Juice Shop is up after \$((i * 3))s"
+                            exit 0
+                        fi
+                        echo "Attempt \$i/60 — not ready yet, retrying in 3s..."
+                        sleep 3
+                    done
+                    echo "Juice Shop never came up — last 50 lines of container logs:"
+                    docker logs --tail 50 juice-shop || true
+                    exit 1
+                """
+                echo '>>> Juice Shop deployed at http://juice-shop:3000 (internal) and http://localhost:3000 (host)'
+            }
         }
 
         stage('DAST - OWASP ZAP') {
