@@ -8,8 +8,6 @@ pipeline {
     //     pollSCM('H/5 * * * *') // check every 5 minutes
     // }
     environment {
-        // Fetches the installation path of the SonarQube Scanner configured in Jenkins and assigns it to this variable
-        SONAR_SCANNER_HOME = tool 'SonarQube Scanner'
         // Sets a directory name where reports will be stored
         REPORT_DIR         = 'reports'
         // Docker image name and tag for the Juice Shop build
@@ -76,27 +74,23 @@ pipeline {
             when { expression { params.RUN_MODE == 'all' } }
             steps {
                 echo '>>> Running SAST with SonarQube...'
-                // Loads SonarQube server configuration from Jenkins
-                withSonarQubeEnv('SonarQube') {
-                    // Executes the SonarQube scanner
-                    // Unique project identifier in SonarQube
-                    // Display name in SonarQube UI
-                    // Sets project version
-                    // Tells SonarQube to scan the current directory
-                    // Excludes node_modules, tests, compiled frontend assets, and Angular cache from scanning
-                    // Points to TypeScript configuration file
-                    // Provides test coverage report path
-                    sh """
-                        ${SONAR_SCANNER_HOME}/bin/sonar-scanner \
-                          -Dsonar.projectKey=juice-shop \
-                          -Dsonar.projectName='Juice Shop' \
-                          -Dsonar.projectVersion=19.2.1 \
-                          -Dsonar.sources=. \
-                          -Dsonar.exclusions=**/node_modules/**,**/test/**,**/frontend/dist/**,**/frontend/src/assets/**,**/.angular/** \
-                          -Dsonar.typescript.tsconfigPath=tsconfig.json \
-                          -Dsonar.javascript.lcov.reportPaths=build/reports/coverage/server-tests/lcov.info \
-                          -Dsonar.sourceEncoding=UTF-8
-                    """
+                // tool lookup happens inside the stage so dast-only builds do
+                // not require the SonarQube Scanner tool to be configured.
+                script {
+                    def scannerHome = tool 'SonarScanner'
+                    withSonarQubeEnv('SonarQube') {
+                        sh """
+                            ${scannerHome}/bin/sonar-scanner \
+                              -Dsonar.projectKey=juice-shop \
+                              -Dsonar.projectName='Juice Shop' \
+                              -Dsonar.projectVersion=19.2.1 \
+                              -Dsonar.sources=. \
+                              -Dsonar.exclusions=**/node_modules/**,**/test/**,**/frontend/dist/**,**/frontend/src/assets/**,**/.angular/** \
+                              -Dsonar.typescript.tsconfigPath=tsconfig.json \
+                              -Dsonar.javascript.lcov.reportPaths=build/reports/coverage/server-tests/lcov.info \
+                              -Dsonar.sourceEncoding=UTF-8
+                        """
+                    }
                 }
             }
         }
