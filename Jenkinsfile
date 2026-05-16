@@ -480,7 +480,7 @@ pipeline {
                           -Dsonar.projectName='Juice Shop' \\
                           -Dsonar.projectVersion=19.2.1 \\
                           -Dsonar.sources=. \\
-                          -Dsonar.exclusions=**/node_modules/**,**/test/**,**/frontend/dist/**,**/frontend/src/assets/**,**/.angular/** \\
+                          -Dsonar.exclusions=**/node_modules/**,**/test/**,**/frontend/dist/**,**/frontend/src/assets/**,**/.angular/**,**/reports/**
                           -Dsonar.typescript.tsconfigPath=tsconfig.json \\
                           -Dsonar.javascript.lcov.reportPaths=build/reports/coverage/server-tests/lcov.info \\
                           -Dsonar.sourceEncoding=UTF-8
